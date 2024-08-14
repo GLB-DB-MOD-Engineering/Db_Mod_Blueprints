@@ -1,0 +1,53 @@
+# Global Variables
+shared_tags = { # required
+  "stla_application_id"   = "CLOUDDB-P"   # reflex prd code
+  "stla_business_unit"    = "edsc"     # reflex
+  "stla_cmdb_hostname"    = "yasp000l" # to_be_defined
+  "stla_cost_center"      = "tbd"      # to_be_defined
+  "stla_discovery_source" = "reflex"
+  "stla_environment"      = "stage"
+  "stla_it_domain"        = "gto"
+  "stla_legal_entity"     = "xp"
+  "stla_multi_tenant"     = "yes"
+  "stla_ops_role"         = "CLOUDDB"
+}
+
+# RDS Configuration
+db_subnet_group_name   = "stla-sng-0027179-db_subnet"
+vpc_security_group_ids = ["sg-0cf3fdc57566a1509"]
+
+identifier                 = "rds-np-clouddb-p-preprod-yasp000l"
+engine                     = "postgres"
+engine_version             = "14.5"
+family                     = "postgres14"
+instance_class             = "db.t3.small" # depending to source application  but we can use some
+allocated_storage          = 20
+max_allocated_storage      = 0 # For production it must be defined 
+auto_minor_version_upgrade = false
+
+# Make sure that database name is capitalized, otherwise RDS will try to recreate RDS instance every time
+# Oracle database name cannot be longer than 8 characters
+username          = "mstrpgsi"		 # calculated (master) => mstr  (DB Engine) => mys (env) => d
+port              = 5432
+multi_az          = false
+availability_zone = "eu-west-3a"
+
+storage_encrypted = false
+# backup
+maintenance_window                    = "Sat:00:00-Sat:03:00"
+backup_window                         = "12:00-14:00"
+enabled_cloudwatch_logs_exports       = ["postgresql", "upgrade"] 	# depending to database
+create_cloudwatch_log_group           = true
+backup_retention_period               = 7
+skip_final_snapshot                   = true
+deletion_protection                   = false
+performance_insights_enabled          = true
+performance_insights_retention_period = 7
+monitoring_interval                   = 60 							# Enhanced monitoring
+monitoring_role_arn                   = "arn:aws:iam::310729053924:role/rds-monitoring-role"# Enhanced monitoring : the role does exist in the AWS account
+parameter_group_name                  = "pg-rds-postgres-yasp000l"
+apply_immediately                     = true
+rds_tags = {
+  "Name"                 = "rds-np-clouddb-p-preprod-yasp000l"
+  "stla_schedule_window" = "mon-fri-0600-2100"
+}
