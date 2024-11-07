@@ -1,0 +1,259 @@
+import re
+
+def clean_sql(statement):
+    """Remove all comment lines from the SQL statement."""
+    cleaned_statement = "\n".join(
+        line for line in statement.splitlines() if not line.strip().startswith('--')
+    ).strip()
+    return cleaned_statement
+
+def convert_db2_to_postgresql(db2_ddl):
+    """Convert DB2 DDL statements to PostgreSQL format."""
+    statements = db2_ddl.strip().split(';')
+    postgres_statements = []
+
+    for statement in statements:
+        statement = statement.strip()
+        # Skip empty statements and comment lines
+        if not statement or statement.startswith('--'):
+            continue
+
+        # Clean the SQL statement by removing any internal comments
+        cleaned_statement = clean_sql(statement)
+
+        if not cleaned_statement:  # Skip if cleaning removes all content
+            continue
+
+        try:
+            # Check the type of SQL statement and convert accordingly
+            if re.match(r'^\s*#', cleaned_statement):
+                continue  # Skip lines starting with #
+
+            if re.match(r'^\s*CREATE\s+DATABASE', cleaned_statement, re.IGNORECASE):
+                result = convert_create_database(cleaned_statement)
+                if result:
+                    postgres_statements.append(result)
+
+            elif re.match(r'^\s*CREATE\s+TABLESPACE', cleaned_statement, re.IGNORECASE):
+                result = convert_create_tablespace(cleaned_statement)
+                if result:
+                    postgres_statements.append(result)
+
+            elif re.match(r'^\s*CREATE\s+(UNIQUE\s+)?INDEX', cleaned_statement, re.IGNORECASE):
+                results = convert_create_index(cleaned_statement)
+                if results:
+                    postgres_statements.extend(results)
+                else:
+                    print(f"No matches found for CREATE INDEX in: '{cleaned_statement}'")
+
+            elif re.match(r'^\s*CREATE\s+TABLE', cleaned_statement, re.IGNORECASE):
+                result = convert_create_table(cleaned_statement)  # This was missing before
+                if result:
+                    postgres_statements.append(result)
+                else:
+                    print(f"No matches found for CREATE TABLE in: '{cleaned_statement}'")
+
+            elif re.match(r'^\s*CREATE\s+VIEW', cleaned_statement, re.IGNORECASE):
+                result = convert_create_view(cleaned_statement)
+                if result:
+                    postgres_statements.append(result)
+                else:
+                    print(f"No matches found for CREATE VIEW in: '{cleaned_statement}'")
+                    
+            elif re.match(r'^\s*COMMENT\s+ON\s+TABLE\s+\w+\.\w+\s+IS', cleaned_statement, re.IGNORECASE):
+                # Process table comment
+                result = convert_comment_on_table(cleaned_statement)
+                if result:
+                    postgres_statements.append(result)
+
+            elif re.match(r'^\s*COMMENT\s+ON\s+\w+\.\w+\s*\((.*?)\)\s*;', cleaned_statement, re.IGNORECASE | re.DOTALL):
+                # Process column comments
+                results = convert_comment_on_table(cleaned_statement)
+                if results:
+                    postgres_statements.extend(results)
+
+                else:
+                    print(f"Unhandled statement type: '{cleaned_statement}'")
+
+        except Exception as e:
+            print(f"Error processing statement '{cleaned_statement}': {e}")
+
+    return '\n'.join(postgres_statements)  # Join the list into a single string
+
+def convert_create_database(statement):
+    """Convert CREATE DATABASE statement from DB2 to PostgreSQL."""
+    cleaned_statement = clean_sql(statement)
+    match = re.search(r'CREATE DATABASE\s+(\w+)', cleaned_statement)
+    if match:
+        db_name = match.group(1)
+        return f"CREATE DATABASE {db_name};"
+    return statement
+
+def convert_create_tablespace(statement):
+    """Convert CREATE TABLESPACE statement from DB2 to PostgreSQL."""
+    cleaned_statement = clean_sql(statement)
+    pattern = (
+        r'CREATE\s+TABLESPACE\s+(\w+)\s+IN\s+(\w+)'
+        r'(?:\s+USING\s+STOGROUP\s+(\w+))?'
+        r'(?:\s+PRIQTY\s+(\d+))?'
+        r'(?:\s+SECQTY\s+(\d+))?'
+        r'(?:\s+ERASE\s+(YES|NO))?'
+        r'(?:\s+FREEPAGE\s+(\d+))?'
+        r'(?:\s+PCTFREE\s+(\d+))?'
+        r'(?:\s+GBPCACHE\s+(CHANGED|NONE))?'
+        r'(?:\s+COMPRESS\s+(YES|NO))?'
+        r'(?:\s+TRACKMOD\s+(YES|NO))?'
+        r'(?:\s+LOGGED)?'
+        r'(?:\s+SEGSIZE\s+(\d+))?'
+        r'(?:\s+BUFFERPOOL\s+(\w+))?'
+        r'(?:\s+LOCKSIZE\s+(\w+))?'
+        r'(?:\s+LOCKMAX\s+(\w+))?'
+        r'(?:\s+CLOSE\s+(YES|NO))?'
+        r'(?:\s+CCSID\s+(\w+))?'
+        r'(?:\s+MAXROWS\s+(\d+))?'
+        r'(?:\s+INSERT\s+ALGORITHM\s+(\d+))?;?'
+    )
+    match = re.search(pattern, cleaned_statement, re.IGNORECASE | re.DOTALL)
+
+    if match:
+        ts_name = match.group(1)
+        return f"CREATE TABLESPACE {ts_name} OWNER your_username WITH (OIDS=FALSE);"
+    
+    print("No match found for CREATE TABLESPACE.")  # Debugging output
+    return None  # Return None if no match
+
+def convert_create_table(statement):
+    """Convert CREATE TABLE statement from DB2 to PostgreSQL."""
+    # Remove comment lines
+    cleaned_statement = clean_sql(statement)
+    
+    # Adjust CHAR datatype for PostgreSQL
+    cleaned_statement = re.sub(r'CHAR\((\d+)\)', r'VARCHAR(\1)', cleaned_statement)
+
+    # Remove unnecessary clauses
+    cleaned_statement = re.sub(r'FOR SBCS DATA', '', cleaned_statement)
+    cleaned_statement = re.sub(r'NOT VOLATILE', '', cleaned_statement)
+    cleaned_statement = re.sub(r'APPEND NO', '', cleaned_statement)
+    cleaned_statement = re.sub(r'CCSID EBCDIC', '', cleaned_statement)
+
+    # Remove the tablespace declaration
+    cleaned_statement = re.sub(r'\s+IN\s+\w+\.\w+', '', cleaned_statement)
+
+    # Normalize spaces
+    cleaned_statement = re.sub(r'\s+', ' ', cleaned_statement).strip()
+
+    # Add a semicolon at the end if missing
+    if not cleaned_statement.endswith(';'):
+        cleaned_statement += ';'
+    
+    return cleaned_statement
+
+
+def convert_comment_on_table(statement):
+    """Convert comments on tables from DB2 to PostgreSQL."""
+    comments = []
+
+    # Pattern for simple table comment
+    simple_pattern = r"COMMENT ON TABLE (\w+\.\w+)\s+IS\s+'(.*?)'\s*;"
+    simple_match = re.search(simple_pattern, statement, re.IGNORECASE)
+
+    if simple_match:
+        table_name = simple_match.group(1)
+        comment = simple_match.group(2)
+        comments.append(f"COMMENT ON {table_name} IS '{comment}';")
+
+    return comments  # Return a list of comments
+
+def convert_create_index(statement):
+    """Convert CREATE INDEX statements from DB2 to PostgreSQL."""
+    cleaned_statement = clean_sql(statement)  # Clean the SQL statement
+    pattern = (
+        r'CREATE\s+(UNIQUE\s+)?INDEX\s+([a-zA-Z0-9_\.]+)\s+ON\s+([a-zA-Z0-9_]+\.[a-zA-Z0-9_]+)\s*'
+        r'\(\s*([^()]+?)\s*\)\s*'
+        r'(?:USING\s+STOGROUP\s+\w+\s*)?'
+        r'(?:PRIQTY\s+\d+\s*)?'
+        r'(?:SECQTY\s+\d+\s*)?'
+        r'(?:ERASE\s+(YES|NO)\s*)?'
+        r'(?:FREEPAGE\s+\d+\s*)?'
+        r'(?:PCTFREE\s+\d+\s*)?'
+        r'(?:GBPCACHE\s+\w+\s*)?'
+        r'(?:CLUSTER\s*)?'
+        r'(?:BUFFERPOOL\s+\w+\s*)?'
+        r'(?:CLOSE\s+(YES|NO)\s*)?'
+        r'(?:COPY\s+(YES|NO)\s*)?'
+        r'(?:PIECESIZE\s+\S+\s*)?'
+        r'(?:COMPRESS\s+(YES|NO)\s*)?;?'
+    )
+
+    matches = re.finditer(pattern, cleaned_statement, re.IGNORECASE | re.DOTALL)
+    results = []
+    for match in matches:
+        unique = "UNIQUE " if match.group(1) else ""  # Check for UNIQUE keyword
+        index_name = match.group(2)  # Index name with schema
+        table_name = match.group(3)   # Table name with schema
+        columns = match.group(4).strip()  # Column definitions
+
+        # Create the standardized output
+        output = f"CREATE {unique}INDEX {index_name} ON {table_name} ({columns});"
+        results.append(output)
+
+    if not results:
+        raise ValueError(f"No matches found for CREATE INDEX in: '{cleaned_statement}'")  # Raise error if no matches
+
+    return results  # Return all matches
+
+def convert_create_view(statement):
+    """Convert DB2 CREATE VIEW statements to PostgreSQL."""
+    cleaned_statement = clean_sql(statement)
+
+    # Updated regex pattern to capture view definition without a column list
+    pattern = (
+        r'CREATE\s+VIEW\s+([\w\.]+)\s*(\((.*?)\))?\s+AS\s+SELECT\s+(.*?)\s+FROM\s+([\w\.]+)\s*;?'
+    )
+
+    match = re.search(pattern, cleaned_statement, re.IGNORECASE | re.DOTALL)
+
+    if match:
+        view_name = match.group(1).strip()  # The schema and view name
+        column_list = match.group(3).strip() if match.group(3) else ""  # The column list (optional)
+        select_columns = match.group(4).strip()  # The selected columns from the view definition
+        from_clause = match.group(5).strip()  # The FROM clause
+        
+        # Format for PostgreSQL
+        if column_list:
+            postgres_view = f"CREATE VIEW {view_name} ({column_list}) AS SELECT {select_columns} FROM {from_clause};"
+        else:
+            postgres_view = f"CREATE VIEW {view_name} AS SELECT {select_columns} FROM {from_clause};"
+        
+        return postgres_view
+    else:
+        raise ValueError(f"No match found for CREATE VIEW in statement: '{cleaned_statement}'")
+
+def main(input_file, output_file):
+    try:
+        with open(input_file, 'r') as infile:
+            db2_ddl = infile.read()
+    except FileNotFoundError:
+        print(f"Error: The file {input_file} does not exist.")
+        return
+    except IOError as e:
+        print(f"Error reading file {input_file}: {e}")
+        return
+
+    postgres_ddl = convert_db2_to_postgresql(db2_ddl)
+
+    #print("Final PostgreSQL DDL:")
+    #print(postgres_ddl)  # Debugging output
+    
+    try:
+        with open(output_file, 'w') as outfile:
+            outfile.write(postgres_ddl)  # This should be a string
+        print(f"Converted DDL written to {output_file}")
+    except IOError as e:
+        print(f"Error writing to file {output_file}: {e}")
+
+# Example usage
+if __name__ == "__main__":
+    input_file = 'DBA01.PATAACCB.ddl'  # Path to your input DB2 DDL file
+    output_file = 'PATAACCB.ddl'  # Path to your output PostgreSQL DDL file
+    main(input_file, output_file)
